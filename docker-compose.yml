@@ -1,0 +1,313 @@
+version: '3'
+services:
+  nginx:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/nginx
+    container_name: nginx
+    restart: always
+    ports:
+      - "8848:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/logs:/var/log/nginx
+    networks:
+      - starlink
+    depends_on:
+      - passport
+      - gateway
+      - transport
+
+
+  mysql:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/mysql:5.7
+    container_name: mysql
+    restart: always
+    ports:
+      - 3306:3306
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_PASSWORD}
+    networks:
+      - starlink
+
+
+  mqnamesrv:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/rocketmq:4.9.4
+    container_name: mqnamesrv
+    restart: always
+    # ports:
+    #   - "9876:9876"
+    environment:
+      JAVA_OPT: -server -Xms512m -Xmx512m
+    command: sh mqnamesrv
+    volumes:
+      - mqnamesrv_logs:/home/rocketmq/logs/rocketmqlogs
+    networks:
+      - starlink
+
+  mqbroker:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/rocketmq:4.9.4
+    container_name: mqbroker
+    privileged: true
+    restart: always
+    # ports:
+    #   - "10909:10909"
+    #   - "10911:10911"
+    #   - "10912:10912"
+    environment:
+      JAVA_OPT_EXT: -server -Xms512M -Xmx512M
+    command: sh mqbroker -c /home/rocketmq/rocketmq-4.9.4/conf/broker.conf
+    depends_on:
+      - mqnamesrv
+    volumes:
+      - ./rocketmq/broker/conf/broker.conf:/home/rocketmq/rocketmq-4.9.4/conf/broker.conf
+      - mqbroker_logs:/home/rocketmq/logs/rocketmqlogs
+      - mqbroker_store:/home/rocketmq/store
+    networks:
+      - starlink
+
+  mqconsole:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/rocketmq-console-ng
+    container_name: mqconsole
+    restart: always
+    ports:
+      - "19876:19876"
+    environment:
+      JAVA_OPTS: -server -Xms512M -Xmx512M -Dserver.port=19876 -Drocketmq.namesrv.addr=mqnamesrv:9876 -Dcom.rocketmq.sendMessageWithVIPChannel=false
+    depends_on:
+      - mqnamesrv
+    networks:
+      - starlink
+
+  zookeeper:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/zookeeper:3.5
+    privileged: true
+    container_name: zookeeper
+    restart: always
+    # ports:
+    #   - "2181:2181"
+    networks:
+      - starlink
+
+  eventuate-cdc:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/eventuate-cdc-service:${EVENTUATE_CDC_VERSION}
+    container_name: eventuate-cdc
+    restart: always
+    # ports:
+    #   - "8888:8888"
+    environment:
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.jdbc.Driver
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/eventuate
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      EVENTUATELOCAL_CDC_DB_USER_NAME: root
+      EVENTUATELOCAL_CDC_DB_PASSWORD: ${MYSQL_PASSWORD}
+      EVENTUATE_LOCAL_ROCKET_MQ_NAMESERVER_ADDRESS: mqnamesrv:9876
+      EVENTUATELOCAL_ZOOKEEPER_CONNECTION_STRING: zookeeper:2181
+      JAVA_OPTS: -server -Xms512M -Xmx512M
+    command: >
+      /bin/bash -c "
+        /usr/wait-for-it.sh zookeeper:2181 --strict --timeout=120 -- sleep 30 && java -server -Xms512M -Xmx512M -Duser.dir=/opt/application -Dspring.config.location=/opt/application/config/application.properties  -jar /opt/application/eventuate-cdc-service-0.17.0-SNAPSHOT.jar
+      "
+    depends_on:
+      - zookeeper
+      - mysql
+      - mqbroker
+    networks:
+      - starlink
+
+  passport:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/authorization-service:${VERSION}
+    container_name: passport
+    restart: always
+    # ports:
+    #   - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/system?characterEncoding=utf8&useUnicode=true&useSSL=false&serverTimezone=GMT%2B8
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_DATASOURCE_DRIVER_CLASSNAME: com.mysql.cj.jdbc.Driver
+      JASYPT_ENCRYPTOR_PASSWORD: ${JASYPT_ENCRYPTOR_PASSWORD}
+      OAUTH_CLIENTID: ${OAUTH_CLIENTID}
+      OAUTH_CLIENTSECRET: ${OAUTH_CLIENT_SECRET}
+      OAUTH_DEFAULT_CLIENT_AUTHORIZE_URL: ${OAUTH_DEFAULT_CLIENT_AUTHORIZE_URL}
+      OAUTH_KEY_PASSWORD: ${OAUTH_KEY_PASSWORD}
+      OAUTH_KEY_ALIAS: ${OAUTH_KEY_ALIAS}
+      OAUTH_KEY_STORE_FILE: ${OAUTH_KEY_STORE_FILE}
+      OAUTH_KEY_STORE_PASSWORD: ${OAUTH_KEY_STORE_PASSWORD}
+      JAVA_OPTS: -server -Xms512M -Xmx512M
+    command: >
+      /bin/bash -c "
+        /usr/wait-for-it.sh mysql:3306 --strict --timeout=120 -- sleep 30 && java -server -Xms512M -Xmx512M -Duser.dir=/opt/application -Dspring.config.location=/opt/application/config/application.yml -jar /opt/application/authorization-service-1.0.0-SNAPSHOT.jar
+      "
+    depends_on:
+      - mysql
+    networks:
+      - starlink
+
+
+  system:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/system-service:${SYSTEM_VERSION}
+    container_name: system
+    restart: always
+    # ports:
+    #   - "7001:7001"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/system?characterEncoding=utf8&useUnicode=true&useSSL=false&serverTimezone=GMT%2B8
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+
+      JASYPT_ENCRYPTOR_PASSWORD: ${JASYPT_ENCRYPTOR_PASSWORD}
+      OAUTH_PUBLICKEY: ${OAUTH_PUBLICKEY}
+      EVENTUATELOCAL_ROCKET_MQ_NAMESERVER_ADDRESS: ${EVENTUATELOCAL_ROCKET_MQ_NAMESERVER_ADDRESS}
+
+      JAVA_OPTS: -server -Xms512M -Xmx512M
+    command: >
+      /bin/bash -c "
+        /usr/wait-for-it.sh passport:8080 --strict --timeout=120 -- sleep 30 &&  java -server -Xms512M -Xmx512M -Duser.dir=/opt/application -Dspring.config.location=/opt/application/config/application.yml -jar /opt/application/system-service-1.0.1-SNAPHOST.jar
+      "
+    depends_on:
+      - passport
+    networks:
+      - starlink
+
+  transport:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/transport-service:${VERSION}
+    container_name: transport
+    restart: always
+    #      ports:
+    #         - "9001:9001"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/message?useUnicode=true&characterEncoding=utf8&useJDBCCompliantTimezoneShift=true&useLegacyDatetimeCode=false&serverTimezone=GMT%2b8&useSSL=true&allowMultiQueries=true&autoReconnect=true&nullCatalogMeansCurrent=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+
+      JASYPT_ENCRYPTOR_PASSWORD: ${JASYPT_ENCRYPTOR_PASSWORD}
+
+      OAUTH_PUBLICKEY: ${OAUTH_PUBLICKEY}
+
+      JAVA_OPTS: -server -Xms512M -Xmx512M
+    command: >
+      /bin/bash -c "
+        /usr/wait-for-it.sh passport:8080 --strict --timeout=120 -- sleep 30 &&   java -server -Xms512M -Xmx512M -Duser.dir=/opt/application -Dspring.config.location=/opt/application/config/application.yml -jar /opt/application/transport-service-1.0.0.jar
+      "
+    depends_on:
+      - passport
+    networks:
+      - starlink
+
+  starlink:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/starlink-admin:${VERSION}
+    container_name: starlink
+    restart: always
+    # ports:
+    #   - "7002:7002"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/starlink?useUnicode=true&characterEncoding=utf8&useJDBCCompliantTimezoneShift=true&useLegacyDatetimeCode=false&serverTimezone=GMT%2b8&useSSL=true&allowMultiQueries=true&autoReconnect=true&nullCatalogMeansCurrent=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+
+      JASYPT_ENCRYPTOR_PASSWORD: ${JASYPT_ENCRYPTOR_PASSWORD}
+
+      OAUTH_CLIENTID: ${OAUTH_CLIENTID}
+      OAUTH_CLIENTSECRET: ${OAUTH_CLIENT_SECRET}
+      OAUTH_PUBLICKEY: ${OAUTH_PUBLICKEY}
+
+      EVENTUATELOCAL_ROCKET_MQ_NAMESERVER_ADDRESS: ${EVENTUATELOCAL_ROCKET_MQ_NAMESERVER_ADDRESS}
+
+      TRANSPORT_CLIENT_ENDPOINT: ${TRANSPORT_CLIENT_ENDPOINT}
+      TRANSPORT_CLIENT_TOKEN: ${TRANSPORT_CLIENT_TOKEN}
+      TRANSPORT_CLIENT_SUBSCRIBE_DESTINATION: ${TRANSPORT_CLIENT_SUBSCRIBE_DESTINATION}
+
+      # 注意该配置
+      SOURCE_DIRECTORY: ${SOURCE_DIRECTORY}
+
+      JAVA_OPTS: -server -Xms512M -Xmx512M
+    command: >
+      /bin/bash -c "
+        /usr/wait-for-it.sh transport:9001 --strict --timeout=120 -- sleep 30 &&  java -server -Xms512M -Xmx512M -Duser.dir=/opt/application -Dspring.config.location=/opt/application/config/application.yml -jar /opt/application/starlink-admin-1.0.0-SNAPSHOT.jar
+      "
+    volumes:
+      - repo:/mnt/data
+    depends_on:
+      - transport
+    networks:
+      - starlink
+
+  gateway:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/gateway-service:${VERSION}
+    container_name: gateway
+    restart: always
+    # ports:
+    #   - "9000:9000"
+    environment:
+      SPRING_R2DBC_URL: r2dbc:mysql://mysql:3306/system?autoReconnect=true&useUnicode=true&characterEncoding=UTF-8&zeroDateTimeBehavior=convertToNull&useSSL=false&sslMode=DISABLED&useTimezone=true&serverZoneId=Asia/Shanghai
+      SPRING_R2DBC_USERNAME: root
+      SPRING_R2DBC_PASSWORD: ${MYSQL_PASSWORD}
+
+      OAUTH_PUBLICKEY: ${OAUTH_PUBLICKEY}
+
+      JAVA_OPTS: -server -Xms512M -Xmx512M -Xmn256m
+    command: >
+      /bin/bash -c "
+        /usr/wait-for-it.sh passport:8080 --strict --timeout=120 -- sleep 30 &&  java -server -Xms512M -Xmx512M -Duser.dir=/opt/application -Dspring.config.location=/opt/application/config/application.yml -jar /opt/application/gateway-service-1.0.0-SNAPSHOT.jar
+      "
+    depends_on:
+      - passport
+    networks:
+      - starlink
+
+    # *********************************************************************************************************
+    # 以下为中间件
+    # *********************************************************************************************************
+  ssh-instance-1:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/centos7-ssh
+    container_name: ssh-instance-1
+    restart: always
+    volumes:
+      - repo:/mnt/data
+      - ./tools:/opt/tools
+    ports:
+      - "5022:22"
+    networks:
+      - starlink
+
+  ssh-instance-2:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/centos7-ssh
+    container_name: ssh-instance-2
+    restart: always
+    volumes:
+      - repo:/mnt/data
+      - ./tools:/opt/tools
+    ports:
+      - "5023:22"
+    networks:
+      - starlink
+
+
+  jenkins-master:
+    image: registry.cn-hangzhou.aliyuncs.com/lixin-help/jenkins
+    container_name: jenkins-master
+    restart: always
+    ports:
+      - "8070:8080"
+    volumes:
+      - ./tools:/opt/tools
+      - repo:/var/jenkins_home/workspace
+    networks:
+      - starlink
+
+
+volumes:
+  mqnamesrv_logs:
+  mqbroker_logs:
+  mqbroker_store:
+  repo:
+
+networks:
+  starlink:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.9.0/24

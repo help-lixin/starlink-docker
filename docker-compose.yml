@@ -266,6 +266,9 @@ services:
     container_name: ssh-instance-1
     restart: always
     volumes:
+      - /usr/lib64/libltdl.so.7:/usr/lib64/libltdl.so.7
+      - /usr/bin/docker:/usr/bin/docker
+      - /var/run/docker.sock:/var/run/docker.sock
       - repo:/mnt/data
       - ./tools:/opt/tools
     ports:
@@ -278,6 +281,9 @@ services:
     container_name: ssh-instance-2
     restart: always
     volumes:
+      - /usr/lib64/libltdl.so.7:/usr/lib64/libltdl.so.7
+      - /usr/bin/docker:/usr/bin/docker
+      - /var/run/docker.sock:/var/run/docker.sock
       - repo:/mnt/data
       - ./tools:/opt/tools
     ports:
@@ -293,6 +299,9 @@ services:
     ports:
       - "8070:8080"
     volumes:
+      - /usr/lib64/libltdl.so.7:/usr/lib64/libltdl.so.7
+      - /usr/bin/docker:/usr/bin/docker
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./tools:/opt/tools
       - repo:/var/jenkins_home/workspace
     networks:

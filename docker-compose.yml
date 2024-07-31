@@ -228,6 +228,8 @@ services:
       /bin/bash -c "
         /usr/wait-for-it.sh transport:9001 --strict --timeout=120 -- sleep 30 &&  java -server -Xms512M -Xmx512M -Duser.dir=/opt/application -Dspring.config.location=/opt/application/config/application.yml -jar /opt/application/starlink-admin-1.0.0-SNAPSHOT.jar
       "
+#    extra_hosts:
+#      - "lb.kubesphere.local:192.168.8.18"
     volumes:
       - repo:/mnt/data
     depends_on:
